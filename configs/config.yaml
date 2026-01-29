@@ -1,0 +1,226 @@
+# =============================================================================
+# FORECASTING PIPELINE CONFIGURATION
+# =============================================================================
+# Single source of truth for all pipeline parameters
+# Delete derived tables and regenerate with this config
+# =============================================================================
+
+project:
+  name: "RG-Forecasting"
+  project_id: "myforecastingsales"
+  location: "me-central1"
+
+# -----------------------------------------------------------------------------
+# GCS PATHS
+# -----------------------------------------------------------------------------
+gcs:
+  bucket: "myforecastingsales-data"
+  raw_sales: "gs://myforecastingsales-data/raw/sales/final_data.csv"
+  raw_sku_attr: "gs://myforecastingsales-data/raw/sku_attributes/sku_list_attribute.csv"
+  pipeline_code: "gs://myforecastingsales-data/pipeline_code/"
+  artifacts: "gs://myforecastingsales-data/artifacts/"
+
+# -----------------------------------------------------------------------------
+# BIGQUERY TABLES
+# -----------------------------------------------------------------------------
+bigquery:
+  dataset: "forecasting"
+
+  # Bronze (raw ingested)
+  sales_raw: "myforecastingsales.forecasting.sales_raw"
+  sku_attr_raw: "myforecastingsales.forecasting.sku_attr"
+
+  # Silver (deduplicated/cleaned)
+  sales_daily: "myforecastingsales.forecasting.sales_daily"
+  sales_daily_clean: "myforecastingsales.forecasting.sales_daily_clean"
+
+  # Gold (spine + features)
+  spine: "myforecastingsales.forecasting.spine_store_item_date"
+  holidays: "myforecastingsales.forecasting.holidays"
+  features_daily: "myforecastingsales.forecasting.features_daily"
+
+  # Output
+  forecast_output: "myforecastingsales.forecasting.forecast_output_daily"
+
+  # Metadata
+  step1_cleaning_report: "myforecastingsales.forecasting.step1_cleaning_report"
+
+# -----------------------------------------------------------------------------
+# DATA SCHEMA
+# -----------------------------------------------------------------------------
+schema:
+  keys:
+    - store_id
+    - sku_id
+    - date
+  target: "sales_clean"
+
+# -----------------------------------------------------------------------------
+# DATE BOUNDARIES
+# -----------------------------------------------------------------------------
+dates:
+  data_start: "2019-01-02"
+  data_end: "2025-12-17"
+  forecast_start: "2025-12-18"
+  horizon_days: 168  # 24 weeks
+  forecast_end: "2026-06-03"  # forecast_start + 167 days
+
+# -----------------------------------------------------------------------------
+# TIME SPLITS
+# -----------------------------------------------------------------------------
+splits:
+  # Primary split
+  train_end: "2025-09-23"      # forecast_start - 12 weeks - 1 day
+  val_start: "2025-09-24"
+  val_end: "2025-12-17"        # Last 12 weeks before forecast
+
+  # Backtests (3 cutoffs)
+  backtests:
+    - cutoff: "2025-06-30"
+      val_weeks: 12
+    - cutoff: "2025-03-31"
+      val_weeks: 12
+    - cutoff: "2024-12-31"
+      val_weeks: 12
+
+# -----------------------------------------------------------------------------
+# CLEANING RULES (LOCKED - DO NOT MODIFY)
+# -----------------------------------------------------------------------------
+cleaning:
+  # Negatives
+  clip_negatives: true
+  negative_flag: "was_negative"
+
+  # COVID window
+  covid_start: "2020-03-15"
+  covid_end: "2021-06-30"
+  covid_period_flag: "is_covid_period"  # Diagnostic only
+  covid_panic_spike_flag: "is_covid_panic_spike"  # For downweight/cap
+  covid_panic_threshold_p99_9: 369
+
+  # Extreme spikes
+  extreme_spike_threshold: 10000
+  extreme_spike_flag: "is_extreme_spike"
+
+# -----------------------------------------------------------------------------
+# HOLIDAYS (3 holidays only)
+# -----------------------------------------------------------------------------
+holidays:
+  - name: "New Year"
+    dates:
+      - "2019-01-01"
+      - "2020-01-01"
+      - "2021-01-01"
+      - "2022-01-01"
+      - "2023-01-01"
+      - "2024-01-01"
+      - "2025-01-01"
+      - "2026-01-01"
+  - name: "Christmas"
+    dates:
+      - "2019-12-25"
+      - "2020-12-25"
+      - "2021-12-25"
+      - "2022-12-25"
+      - "2023-12-25"
+      - "2024-12-25"
+      - "2025-12-25"
+  - name: "Good Friday"
+    dates:
+      - "2019-04-19"
+      - "2020-04-10"
+      - "2021-04-02"
+      - "2022-04-15"
+      - "2023-04-07"
+      - "2024-03-29"
+      - "2025-04-18"
+      - "2026-04-03"
+
+# -----------------------------------------------------------------------------
+# FEATURE ENGINEERING
+# -----------------------------------------------------------------------------
+features:
+  # Calendar
+  calendar:
+    - day_of_week
+    - week_of_year
+    - month
+    - year
+    - is_weekend
+
+  # Holiday
+  holiday:
+    - is_holiday
+    - days_to_holiday
+    - days_from_holiday
+
+  # Lags (shifted to avoid leakage)
+  lags:
+    - 1
+    - 7
+    - 14
+    - 28
+    - 56
+
+  # Rolling windows (shifted)
+  rolling:
+    windows:
+      - 7
+      - 28
+    stats:
+      - mean
+      - std
+      - max
+
+  # Intermittency
+  intermittency:
+    - days_since_last_sale
+    - zero_run_length
+    - nz_rate_7d
+    - nz_rate_28d
+
+  # Attributes
+  attributes:
+    - local_imported_attribute
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIG
+# -----------------------------------------------------------------------------
+model:
+  type: "lightgbm"
+  target_transform: "log1p"
+
+  # Sample weighting
+  downweight_covid_panic: true
+  covid_panic_weight: 0.1
+
+  # Categoricals
+  categorical_features:
+    - store_id
+    - sku_id
+    - day_of_week
+    - month
+    - local_imported_attribute
+
+# -----------------------------------------------------------------------------
+# EVALUATION METRICS
+# -----------------------------------------------------------------------------
+evaluation:
+  metrics:
+    - WAPE
+    - sMAPE
+    - Bias
+  segments:
+    - volume_tier
+    - intermittency_tier
+    - local_imported
+    - store_id
+  n_example_plots: 10
+
+# -----------------------------------------------------------------------------
+# STORES & SKUS
+# -----------------------------------------------------------------------------
+dimensions:
+  n_stores: 33
+  store_id_range: [201, 233]
+  n_skus: 3650

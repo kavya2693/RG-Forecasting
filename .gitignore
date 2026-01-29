@@ -1,0 +1,19 @@
+# Auto Claude data directory
+.auto-claude/
+
+# Large data files (too big for GitHub)
+*.csv
+data/
+artifacts/
+
+# Mac
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Temp
+*.log
+tmp/

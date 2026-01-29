@@ -1,0 +1,521 @@
+# =============================================================================
+# RG-FORECASTING PIPELINE PARAMETERS
+# =============================================================================
+# Version: 1.0
+# Created: 2026-01-28
+# Description: Central configuration for all pipeline parameters
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PROJECT CONFIGURATION
+# -----------------------------------------------------------------------------
+project:
+  name: "RG-Forecasting"
+  gcp_project_id: "myforecastingsales"
+  bq_dataset_main: "forecasting"           # me-central1 region
+  bq_dataset_us: "forecasting_us"          # US region (for BQML BOOSTED_TREE)
+  gcs_bucket: "myforecastingsales-data"
+
+# -----------------------------------------------------------------------------
+# DATA SOURCE CONFIGURATION
+# -----------------------------------------------------------------------------
+data_source:
+  raw_table: "myforecastingsales.forecasting.bronze_sales_raw"
+  date_range:
+    start: "2019-01-02"
+    end: "2025-12-17"
+  stores:
+    count: 33
+    id_range: [201, 233]
+  skus:
+    approximate_count: 3650
+
+# -----------------------------------------------------------------------------
+# FORECAST CONFIGURATION
+# -----------------------------------------------------------------------------
+forecast:
+  horizon_days: 168                        # 24 weeks
+  horizon_weeks: 24
+  forecast_start_date: "2025-12-18"
+  forecast_end_date: "2026-06-04"
+  granularity: "daily"
+  target_variable: "sales_filled"
+
+# -----------------------------------------------------------------------------
+# DATA CLEANING PARAMETERS
+# -----------------------------------------------------------------------------
+cleaning:
+  # Negative sales handling
+  negative_sales:
+    action: "clip_to_zero"                 # Options: clip_to_zero, flag_only, impute
+    flag_column: "was_negative"
+
+  # Missing dates handling
+  missing_dates:
+    action: "fill_with_zero"               # Expand spine to include all dates
+    fill_value: 0
+
+  # Outlier detection
+  outliers:
+    method: "iqr"                          # Options: iqr, zscore, percentile
+    iqr_multiplier: 3.0
+    flag_column: "is_extreme_spike"
+    action: "flag_only"                    # Don't remove, just flag
+
+  # COVID period handling
+  covid_period:
+    start_date: "2020-03-01"
+    end_date: "2020-06-30"
+    panic_spike_start: "2020-03-10"
+    panic_spike_end: "2020-03-25"
+    flag_columns:
+      - "is_covid_period"
+      - "is_covid_panic_spike"
+    sample_weight_panic: 0.25              # Downweight panic period
+
+  # Store closures
+  closures:
+    source: "store_closure_calendar"
+    override_rule: "yhat = 0 when is_store_closed = 1"
+
+# -----------------------------------------------------------------------------
+# SPINE CONFIGURATION (SILVER LAYER)
+# -----------------------------------------------------------------------------
+spine:
+  table_name: "silver_spine_daily"
+  grain: ["store_id", "sku_id", "date"]
+  date_column: "date"
+
+  # Spine expansion rules
+  expansion:
+    method: "cross_join"                   # All stores x all SKUs x all dates
+    start_date: "2019-01-02"
+    end_date: "2025-12-17"
+
+  # Series metadata
+  series_metadata:
+    first_sale_date: "series_first_sale_date"
+    last_sale_date: "series_last_sale_date"
+    total_days: "series_total_days"
+    positive_days: "series_positive_days"
+    non_zero_rate: "series_nz_rate"
+
+# -----------------------------------------------------------------------------
+# FEATURE ENGINEERING PARAMETERS
+# -----------------------------------------------------------------------------
+features:
+  gold_table: "gold_panel_features_v2"
+
+  # Calendar features
+  calendar:
+    - dow                                  # Day of week (0-6)
+    - week_of_year                         # Week number (1-52)
+    - month                                # Month (1-12)
+    - year                                 # Year
+    - day_of_month                         # Day of month (1-31)
+    - day_of_year                          # Day of year (1-366)
+    - quarter                              # Quarter (1-4)
+    - is_weekend                           # Boolean
+    - is_month_start                       # Boolean
+    - is_month_end                         # Boolean
+    - week_of_month                        # Week within month (1-5)
+
+  # Cyclical encodings (prevent discontinuity)
+  cyclical:
+    - name: "sin_doy"
+      formula: "SIN(2 * PI * day_of_year / 365)"
+    - name: "cos_doy"
+      formula: "COS(2 * PI * day_of_year / 365)"
+    - name: "sin_dow"
+      formula: "SIN(2 * PI * dow / 7)"
+    - name: "cos_dow"
+      formula: "COS(2 * PI * dow / 7)"
+
+  # Lag features (CAUSAL - all end at "1 PRECEDING")
+  lags:
+    windows: [1, 7, 14, 28, 56]
+    causal_offset: 1                       # Exclude current day
+    null_handling: "fill_zero"
+
+  # Rolling window features (CAUSAL)
+  rolling:
+    windows: [7, 14, 28]
+    aggregations:
+      - mean
+      - sum
+      - std
+    causal_frame: "ROWS BETWEEN 27 PRECEDING AND 1 PRECEDING"  # Example for 28-day
+
+  # Sparse-aware features
+  sparse:
+    - name: "nz_rate_7"
+      description: "Fraction of non-zero days in last 7 days"
+    - name: "nz_rate_14"
+      description: "Fraction of non-zero days in last 14 days"
+    - name: "nz_rate_28"
+      description: "Fraction of non-zero days in last 28 days"
+    - name: "roll_mean_pos_7"
+      description: "Mean of positive sales only (last 7 days)"
+    - name: "roll_mean_pos_14"
+      description: "Mean of positive sales only (last 14 days)"
+    - name: "roll_mean_pos_28"
+      description: "Mean of positive sales only (last 28 days)"
+
+  # Recency features
+  recency:
+    - name: "days_since_last_sale_asof"
+      description: "Days since last positive sale (as of yesterday)"
+      max_cap: null
+    - name: "dormancy_capped"
+      description: "Days since last sale, capped at 90"
+      cap_value: 90
+    - name: "zero_run_length_asof"
+      description: "Consecutive zero days ending yesterday"
+    - name: "last_sale_qty_asof"
+      description: "Quantity of last positive sale"
+
+  # Log transforms (for skewed features)
+  log_transforms:
+    suffix: "_log1p"
+    formula: "LN(1 + x)"
+    apply_to:
+      - lag_7
+      - lag_14
+      - lag_28
+      - roll_mean_7
+      - roll_mean_14
+      - roll_mean_28
+      - roll_mean_pos_7
+      - roll_mean_pos_14
+      - roll_mean_pos_28
+
+  # Closure features
+  closure:
+    - is_store_closed
+    - days_to_next_closure
+    - days_from_prev_closure
+    - is_closure_week
+    - closure_name
+
+  # Series-level features (static per series)
+  series_level:
+    - series_history_days
+    - series_nz_rate
+    - series_ADI                           # Average Demand Interval
+    - is_intermittent                      # ADI > 1.32
+
+# -----------------------------------------------------------------------------
+# TIERING CONFIGURATION
+# -----------------------------------------------------------------------------
+tiering:
+  reference_date: "2025-12-17"             # As-of date for tier assignment
+  table_name: "series_tiers_asof_20251217"
+
+  tiers:
+    T1_MATURE:
+      description: "Stable series with 2+ years history"
+      criteria:
+        min_history_days: 365
+        min_nz_rate: 0.10
+      model: "BOOSTED_TREE_REGRESSOR"
+      platform: "BigQuery ML (US)"
+      feature_count: 32
+
+    T2_GROWING:
+      description: "Emerging series with 3-12 months history"
+      criteria:
+        min_history_days: 90
+        max_history_days: 364
+        min_nz_rate: 0.05
+      model: "LightGBM"
+      platform: "Local Python"
+      feature_count: 21
+
+    T3_COLD_START:
+      description: "New or sparse series"
+      criteria:
+        min_history_days: 28
+        max_history_days: 89
+        or_condition: "nz_rate < 0.05"
+      model: "LightGBM (regularized)"
+      platform: "Local Python"
+      feature_count: 16
+
+    T0_EXCLUDED:
+      description: "Insufficient data for ML"
+      criteria:
+        max_history_days: 27
+        or_condition: "dormant > 90 days"
+      model: "Naive baseline (lag_7 or roll_mean_28)"
+      platform: "Rule-based"
+      feature_count: 0
+
+# -----------------------------------------------------------------------------
+# CROSS-VALIDATION SPLITS
+# -----------------------------------------------------------------------------
+splits:
+  validation_horizon_days: 168             # Match forecast horizon
+
+  # Fold definitions
+  folds:
+    # T1_MATURE folds (global date-based)
+    F1:
+      tier: "T1_MATURE"
+      val_start: "2025-06-03"
+      val_end: "2025-12-17"
+      train_end: "2025-06-02"
+      split_type: "global"
+
+    F2:
+      tier: "T1_MATURE"
+      val_start: "2024-12-05"
+      val_end: "2025-06-02"
+      train_end: "2024-12-04"
+      split_type: "global"
+
+    F3:
+      tier: "T1_MATURE"
+      val_start: "2024-06-08"
+      val_end: "2024-12-04"
+      train_end: "2024-06-07"
+      split_type: "global"
+
+    # T2_GROWING folds (global date-based)
+    G1:
+      tier: "T2_GROWING"
+      val_start: "2025-06-03"
+      val_end: "2025-12-17"
+      train_end: "2025-06-02"
+      split_type: "global"
+
+    G2:
+      tier: "T2_GROWING"
+      val_start: "2024-12-05"
+      val_end: "2025-06-02"
+      train_end: "2024-12-04"
+      split_type: "global"
+
+    # T3_COLD_START fold (per-series anchored)
+    C1:
+      tier: "T3_COLD_START"
+      val_window_days: 28
+      split_type: "per_series_anchored"
+      description: "Each series uses its own last 28 days as VAL"
+
+  # Eligibility rules
+  eligibility:
+    min_train_days: 7
+    min_positive_days: 1
+    table_name: "series_fold_eligibility_v2"
+
+# -----------------------------------------------------------------------------
+# MODEL HYPERPARAMETERS
+# -----------------------------------------------------------------------------
+models:
+  # T1_MATURE: BigQuery ML BOOSTED_TREE
+  T1_MATURE:
+    algorithm: "BOOSTED_TREE_REGRESSOR"
+    platform: "BigQuery ML"
+    hyperparameters:
+      model_type: "BOOSTED_TREE_REGRESSOR"
+      data_split_method: "NO_SPLIT"
+      num_parallel_tree: 1
+      max_iterations: 100
+      learn_rate: 0.1
+      min_tree_child_weight: 50
+      l2_reg: 2.0
+      early_stop: true
+    features:
+      calendar: [dow, is_weekend, week_of_year, month, day_of_year, sin_doy, cos_doy, sin_dow, cos_dow]
+      closure: [is_store_closed, days_to_next_closure, days_from_prev_closure, is_closure_week]
+      lags: [lag_1, lag_7, lag_14, lag_28, lag_56]
+      rolling: [roll_mean_7, roll_sum_7, roll_mean_28, roll_sum_28, roll_std_28]
+      sparse: [nz_rate_7, nz_rate_28, roll_mean_pos_28]
+      recency: [days_since_last_sale_asof, dormancy_capped, zero_run_length_asof, last_sale_qty_asof]
+      ids: [store_id, sku_id]
+
+  # T2_GROWING: LightGBM
+  T2_GROWING:
+    algorithm: "LightGBM"
+    platform: "Local Python"
+    hyperparameters:
+      objective: "regression"
+      metric: "mae"
+      num_leaves: 31
+      learning_rate: 0.05
+      feature_fraction: 0.8
+      bagging_fraction: 0.8
+      bagging_freq: 5
+      min_data_in_leaf: 30
+      lambda_l2: 1.5
+      num_iterations: 300
+      early_stopping_rounds: 30
+    features:
+      calendar: [dow, is_weekend, month, year, day_of_year, sin_doy, cos_doy]
+      closure: [is_store_closed, is_closure_week]
+      lags: [lag_1, lag_7, lag_14, lag_28]
+      rolling: [roll_mean_7, roll_mean_28, nz_rate_28]
+      recency: [days_since_last_sale_asof, zero_run_length_asof]
+      ids: [store_id, sku_id]
+
+  # T3_COLD_START: LightGBM (heavily regularized)
+  T3_COLD_START:
+    algorithm: "LightGBM"
+    platform: "Local Python"
+    hyperparameters:
+      objective: "regression"
+      metric: "mae"
+      num_leaves: 15
+      learning_rate: 0.1
+      feature_fraction: 0.8
+      bagging_fraction: 0.8
+      bagging_freq: 5
+      min_data_in_leaf: 20
+      lambda_l2: 2.0
+      num_iterations: 200
+      early_stopping_rounds: 20
+    features:
+      calendar: [dow, is_weekend, month, day_of_year, sin_doy, cos_doy]
+      closure: [is_store_closed, is_closure_week]
+      lags: [lag_1, lag_7, lag_14]
+      rolling: [roll_mean_28, nz_rate_28]
+      recency: [days_since_last_sale_asof]
+      ids: [store_id, sku_id]
+
+# -----------------------------------------------------------------------------
+# BASELINE MODELS
+# -----------------------------------------------------------------------------
+baselines:
+  smart_baseline:
+    table_name: "baseline_smart_pred_v2"
+    method: "roll_mean_28"
+    description: "28-day rolling average with closure override"
+
+  naive_lag7:
+    method: "lag_7"
+    description: "Same day last week"
+
+  naive_lag28:
+    method: "lag_28"
+    description: "Same day 4 weeks ago"
+
+# -----------------------------------------------------------------------------
+# EVALUATION METRICS
+# -----------------------------------------------------------------------------
+evaluation:
+  primary_metric: "WMAPE"                  # Weighted Mean Absolute Percentage Error
+  secondary_metrics:
+    - MAE                                  # Mean Absolute Error
+    - RMSE                                 # Root Mean Squared Error
+    - Bias                                 # Mean Error (over/under prediction)
+
+  # WMAPE formula
+  wmape_formula: "SUM(|y - yhat|) / SUM(y) * 100"
+
+  # Sparse data guards
+  sparse_guards:
+    min_actual_sum: 1                      # Avoid division by zero
+    zero_accuracy: "Fraction where y=0 and yhat<0.5"
+
+  # Validation checks
+  validation_checks:
+    - name: "closure_violations"
+      rule: "COUNT where is_store_closed=1 AND yhat>0"
+      expected: 0
+    - name: "negative_predictions"
+      rule: "COUNT where yhat<0"
+      expected: 0
+    - name: "series_mismatch"
+      rule: "TRAIN series count == VAL series count"
+      expected: true
+
+  # Output table
+  predictions_table: "val_pred_gbdt_v2"
+  evaluation_table: "eval_lgbm_v2"
+
+# -----------------------------------------------------------------------------
+# POST-PROCESSING RULES
+# -----------------------------------------------------------------------------
+post_processing:
+  closure_override:
+    rule: "IF is_store_closed = 1 THEN yhat = 0"
+    applied_at: "post_prediction"
+
+  negative_clipping:
+    rule: "yhat = MAX(0, yhat)"
+    applied_at: "post_prediction"
+
+  rounding:
+    rule: "ROUND(yhat, 2)"
+    applied_at: "final_output"
+
+# -----------------------------------------------------------------------------
+# ASSUMPTIONS & CONSTRAINTS
+# -----------------------------------------------------------------------------
+assumptions:
+  data:
+    - "Sales data is complete from 2019-01-02 onwards"
+    - "Missing dates indicate zero sales (not missing data)"
+    - "Negative sales are returns/corrections, clipped to zero for modeling"
+    - "Store closure calendar is accurate and complete"
+
+  modeling:
+    - "Sales patterns are stationary enough for ML models"
+    - "168-day validation horizon mimics production forecast horizon"
+    - "Features are strictly causal (no future information leakage)"
+    - "Store and SKU IDs are treated as categorical features"
+    - "COVID panic period (Mar 10-25, 2020) is downweighted"
+
+  tiering:
+    - "Series characteristics are stable within the forecast horizon"
+    - "Tier assignment is based on history as of 2025-12-17"
+    - "Cold-start series need per-series anchored validation"
+
+  business:
+    - "Forecast is for replenishment planning, not promotional"
+    - "yhat=0 is acceptable when store is closed"
+    - "WMAPE is the primary business metric"
+
+# -----------------------------------------------------------------------------
+# PIPELINE EXECUTION ORDER
+# -----------------------------------------------------------------------------
+pipeline_steps:
+  1_data_exploration:
+    description: "Understand raw data structure and quality"
+    outputs: ["data_profile_report"]
+
+  2_data_cleaning:
+    description: "Handle negatives, outliers, missing dates"
+    outputs: ["bronze_sales_raw"]
+
+  3_spine_creation:
+    description: "Create complete date spine with series metadata"
+    outputs: ["silver_spine_daily"]
+
+  4_feature_engineering:
+    description: "Generate all ML features (calendar, lags, rolling, etc.)"
+    outputs: ["gold_panel_features_v2"]
+
+  5_tiering:
+    description: "Assign each series to a tier based on history"
+    outputs: ["series_tiers_asof_20251217"]
+
+  6_train_val_splits:
+    description: "Create cross-validation folds with eligibility rules"
+    outputs: ["v_trainval_lgbm_v2", "series_fold_eligibility_v2"]
+
+  7_baseline_models:
+    description: "Generate naive baseline predictions"
+    outputs: ["baseline_smart_pred_v2"]
+
+  8_model_training:
+    description: "Train tier-specific models on each fold"
+    outputs: ["model_f1_t1_v1", "model_f2_t1_v1", "model_f3_t1_v1", "lgbm_g1_v1", "lgbm_g2_v1", "lgbm_c1_v1"]
+
+  9_evaluation:
+    description: "Generate predictions and calculate metrics"
+    outputs: ["val_pred_gbdt_v2", "eval_lgbm_v2"]
+
+  10_production_forecast:
+    description: "Generate 168-day forward forecasts"
+    outputs: ["forecast_prod_v1"]
