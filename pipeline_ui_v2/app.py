@@ -1301,13 +1301,12 @@ elif page == "exploration":
         st.metric("Zero Rate", "75%", help="75% of daily observations have zero sales")
 
     # --- Critical Business Findings ---
-    st.markdown("### Five Key Business Insights")
+    st.markdown("### Four Key Business Insights")
     findings = [
         ("1. Sales volume is highly concentrated", "Top 1% of store-SKU combinations generate 28% of all sales. Top 10% generate 71%. The rest is long-tail."),
-        ("2. 35% of stores underperform", "Only 4 out of 26 stores are classified as 'High Performance'. 9 stores consistently underperform."),
-        ("3. December alone drives 13% of annual volume", "Weeks 49-52 see sales nearly double. If the model gets December wrong, the whole year is wrong."),
-        ("4. Customers stockpile before closures", "Sales spike 50% in the week before a store closure. This is predictable and must be modelled."),
-        ("5. No promotion data available", "~57 promotional weeks were inferred for top SKUs from sales spikes alone. Real promo calendars would be a game-changer."),
+        ("2. December alone drives 13% of annual volume", "Weeks 49-52 see sales nearly double. This seasonal pattern is the strongest signal in the data."),
+        ("3. Customers stockpile before closures", "Sales spike 50% in the week before a store closure. This is predictable and must be modelled."),
+        ("4. No promotion data available", "~57 promotional weeks were inferred for top SKUs from sales spikes alone. Real promo calendars would be a game-changer."),
     ]
     for title, detail in findings:
         st.markdown(f"**{title}**: {detail}")
@@ -1319,7 +1318,7 @@ elif page == "exploration":
         "Weekly Trend",
         "Store Performance",
         "SKU Portfolio",
-        "Revenue Concentration",
+        "Sales Concentration",
         "Temporal Patterns",
         "Sparsity & Dormancy",
         "Closure Impact",
@@ -1528,10 +1527,10 @@ elif page == "exploration":
             st.plotly_chart(fig_pareto, use_container_width=True)
 
     # ═══════════════════════════════════════════════════════════════════
-    # TAB 4: REVENUE CONCENTRATION
+    # TAB 4: SALES CONCENTRATION
     # ═══════════════════════════════════════════════════════════════════
     with eda_tabs[3]:
-        st.markdown("### Revenue Concentration at Store-SKU Level")
+        st.markdown("### Sales Volume Concentration at Store-SKU Level")
         if eda_deep and "sales_concentration" in eda_deep:
             sc = eda_deep["sales_concentration"]
             conc_labels = ["Top 1%", "Top 5%", "Top 10%", "Top 20%", "Remaining 80%"]
@@ -2034,13 +2033,12 @@ elif page == "exploration":
     st.markdown("---")
 
     key_takeaway(
-        "The EDA reveals six structural forces shaping this data: "
+        "The EDA reveals five structural forces shaping this data: "
         "(1) Extreme sparsity (75% zeros) requiring two-stage models, "
-        "(2) Brutal revenue concentration (top 1% = 28% of sales) justifying ABC segmentation, "
+        "(2) Sales volume concentration (top 1% = 28% of sales) justifying ABC segmentation, "
         "(3) Strong weekly and annual seasonality, "
         "(4) A 50% pre-closure stockpiling effect, "
-        "(5) Missing promotion data (the biggest gap), "
-        "and (6) Assortment dilution as the catalog grows. "
+        "and (5) Missing promotion data (the biggest gap). "
         "Each of these insights led to a specific modelling decision."
     )
 
@@ -4225,9 +4223,9 @@ is_good_friday = manual_calendar_lookup(date)
 
         callout_why(
             "Lesson: Pool Data Across Stores",
-            "Store-level patterns are better captured by store_id as a categorical feature within a pooled model. "
+            "A single pooled model trained on all stores outperforms per-store models. "
             "The pooled model learns cross-store patterns (e.g., 'all stores spike in December') that per-store models miss. "
-            "Store-specific adjustments come from the store_id embedding and store-level aggregate features."
+            "Store-specific patterns emerge naturally from the store-SKU-level training data."
         )
 
         st.markdown("---")
