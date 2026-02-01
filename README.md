@@ -286,6 +286,6 @@ Improvements for better seasonality, sparse handling, and closure proximity.
 | 7 | Feature Engineering | ✅ DONE |
 | 8 | Time Splits | ✅ DONE |
 | 9 | Baselines | ✅ DONE |
-| 10 | Model Training | ⏳ PENDING |
-| 11 | Evaluation | ⏳ PENDING |
-| 12 | Forecast Generation | ⏳ PENDING |
+| 10 | Model Training | ✅ DONE (59.4% A-items, 84% weekly store) |
+| 11 | Evaluation | ✅ DONE |
+| 12 | Forecast Generation | ✅ DONE (168-day forecast live) |
