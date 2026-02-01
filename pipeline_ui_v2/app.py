@@ -403,7 +403,10 @@ if page == "overview":
     <strong>ABC Segmentation</strong> (within each tier):<br>
     • <strong>A-items</strong> = Top 80% of sales volume — high-frequency, most predictable<br>
     • <strong>B-items</strong> = Next 15% of sales — medium frequency<br>
-    • <strong>C-items</strong> = Bottom 5% of sales — sparse, hardest to predict
+    • <strong>C-items</strong> = Bottom 5% of sales — sparse, hardest to predict<br><br>
+    <strong>Why separate models?</strong> A single model cannot serve all three well — A-items need capacity
+    to learn complex patterns (255 leaves), while C-items need restraint to avoid memorizing noise (31 leaves,
+    heavy regularization).
     </div>
     """, unsafe_allow_html=True)
 
@@ -448,7 +451,10 @@ if page == "overview":
     <strong>Tiered Architecture</strong> (based on data maturity):<br>
     • <strong>T1 Mature</strong>: 65,724 series (93% of sales) — 6+ years of history, stable patterns<br>
     • <strong>T2 Growing</strong>: 34,639 series (7% of sales) — 1-6 years of history, emerging trends<br>
-    • <strong>T3 Cold Start</strong>: 14,138 series (<1% of sales) — new/sparse series, limited history
+    • <strong>T3 Cold Start</strong>: 14,138 series (<1% of sales) — new/sparse series, limited history<br><br>
+    <strong>Why tiers?</strong> A series with 5+ years of history can support complex models (255 leaves,
+    lag_28 features). A cold-start series with 60 days of history needs heavy regularization and simpler
+    features to avoid overfitting.
     </div>
     """, unsafe_allow_html=True)
 
@@ -860,6 +866,15 @@ if page == "overview":
         "Each step revealed something about the data, and each failure narrowed the search space."
     )
 
+    # Model naming legend
+    st.markdown("""
+**Model Naming Legend:**
+- **B1: Two-Stage** = Binary classifier (predicts if sale occurs) + Regressor (predicts quantity)
+- **C1: Log Transform** = Train on log(sales) instead of raw sales to handle skewed distribution
+- **C1+B1 Combined** = Two-stage model with log-transformed regressor
+- **Per-Segment A/B/C** = Separate models for high/medium/low volume SKUs
+    """)
+
     evolution_steps = [
         "Baseline LightGBM",
         "B1: Two-Stage",
@@ -1063,7 +1078,7 @@ elif page == "architecture":
 │  └──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘  │
 │       │               │               │               │               │         │
 │       ▼               ▼               ▼               ▼               ▼         │
-│   134.9M rows    Full panel       32 features    65K/35K/14K    9 models       │
+│   134.9M rows    Full panel       20 features    65K/35K/14K    9 models       │
 │   33 stores      116K series      per series     series         (3 tier×3 ABC) │
 │   3,650 SKUs     7 years          causal only                   + classifier   │
 │                                                                                  │
@@ -1088,7 +1103,7 @@ elif page == "architecture":
     callout_why(
         "Why A/B/C Segments?",
         "Within each tier, series are further split into ABC segments based on cumulative sales share:<br>"
-        "<strong>A-items</strong> (top 80% of sales): High-volume, predictable products that drive most revenue. "
+        "<strong>A-items</strong> (top 80% of sales): High-volume, predictable products that drive most sales volume. "
         "They get the most complex model (255 leaves, 1000 boosting rounds).<br>"
         "<strong>B-items</strong> (next 15% of sales): Moderate movers with medium complexity (63 leaves).<br>"
         "<strong>C-items</strong> (last 5% of sales): Slow movers and long-tail products that sell rarely. "
@@ -1162,7 +1177,7 @@ elif page == "architecture":
 │                                                                                  │
 │                    ┌─────────────────┐                                          │
 │                    │  Input Features │                                          │
-│                    │   (32 features) │                                          │
+│                    │   (20 features) │                                          │
 │                    └────────┬────────┘                                          │
 │                             │                                                    │
 │              ┌──────────────┴──────────────┐                                    │
@@ -1288,7 +1303,7 @@ elif page == "exploration":
     # --- Critical Business Findings ---
     st.markdown("### Five Key Business Insights")
     findings = [
-        ("1. Revenue is brutally concentrated", "Top 1% of store-SKU combinations generate 28% of all sales. Top 10% generate 71%. The rest is noise."),
+        ("1. Sales volume is highly concentrated", "Top 1% of store-SKU combinations generate 28% of all sales. Top 10% generate 71%. The rest is long-tail."),
         ("2. 35% of stores underperform", "Only 4 out of 26 stores are classified as 'High Performance'. 9 stores consistently underperform."),
         ("3. December alone drives 13% of annual volume", "Weeks 49-52 see sales nearly double. If the model gets December wrong, the whole year is wrong."),
         ("4. Customers stockpile before closures", "Sales spike 50% in the week before a store closure. This is predictable and must be modelled."),
